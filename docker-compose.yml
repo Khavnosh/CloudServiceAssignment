@@ -1,0 +1,106 @@
+# =============================================================
+# Inventory Management System - Docker Compose
+# Services: frontend (Vue+Nginx) | backend (Node.js) | db (PostgreSQL)
+# Networks: external (public) | internal (backend + db only)
+# Volumes:  pgdata (DB persistence) | nginx-logs
+# =============================================================
+
+services:
+  # ---------- Frontend : Vue.js SPA served by Nginx (reverse proxy) ----------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: inventory-frontend
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    networks:
+      - external
+      - internal
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - nginx-logs:/var/log/nginx
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # ---------- Backend : Node.js REST API ----------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: inventory-backend
+    expose:
+      - "3000"
+    networks:
+      - internal
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # ---------- Database : PostgreSQL (persistent named volume) ----------
+  db:
+    image: postgres:16-alpine
+    container_name: inventory-db
+    expose:
+      - "5432"
+    networks:
+      - internal
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+# =============================================================
+# Networks
+#   external : reachable by the host / public internet users
+#   internal : isolated; only backend + db (+ frontend as bridge)
+# =============================================================
+networks:
+  external:
+    driver: bridge
+  internal:
+    driver: bridge
+    internal: true
+
+# =============================================================
+# Named Volumes
+#   pgdata     : PostgreSQL data files (survives container removal)
+#   nginx-logs : Nginx access / error logs
+# =============================================================
+volumes:
+  pgdata:
+  nginx-logs:
